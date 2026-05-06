@@ -4,3 +4,8 @@ venv/
 
 *.log
 auth.json
+.gocache/
+.gopath/
+srun-login-go
+srun_login.log
+srun_login.log.1
