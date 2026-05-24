@@ -12,6 +12,7 @@
 - 定时刷新登录，默认每 6 小时注销并重新登录一次
 - 多账号随机重试，适合账号池轮换
 - 写入 `srun_login.log`，日志达到 10 MB 后轮转
+- 支持安装为系统服务（Windows/Linux/macOS）
 
 ## 开始使用
 
@@ -39,45 +40,116 @@ nohup ./hdu-srun-login &
 
 ```bash
 ./hdu-srun-login \
-  -config config.yaml \
-  -check-interval 2m \
-  -refresh-interval 6h
+  --config config.yaml \
+  --check-interval 2m \
+  --refresh-interval 6h
 ```
 
 执行一次状态检查和登录：
 
 ```bash
-./srun-login-go -once
+./hdu-srun-login --once
 ```
 
-## systemd
+## 安装为系统服务
 
-将二进制和 `auth.json` 放在同一个目录，例如 `/opt/srun-login-go`。
+支持 Windows、Linux 和 macOS 平台。使用 `install` 命令可以自动注册系统服务：
 
-```ini
-[Unit]
-Description=srun login
-After=network-online.target
-Wants=network-online.target
+- **Windows**: 注册为 Windows Service (SCM)，开机自动启动
+- **Linux**: 注册为 systemd 服务，依赖网络可用后启动，失败时自动重启
+- **macOS**: 注册为 launchd 服务，开机自动启动
 
-[Service]
-Type=simple
-WorkingDirectory=/opt/srun-login-go
-ExecStart=/opt/srun-login-go/srun-login-go -config auth.json
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-启用服务：
+### 安装服务
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now srun-login-go.service
-sudo journalctl -u srun-login-go.service -f
+# 默认安装（程序到用户 bin 目录，配置到 ~/hdu-srun-login.yaml）
+./hdu-srun-login install
+
+# 指定程序安装目录
+./hdu-srun-login install --bin-dir /path/to/bin
+
+# 指定要安装的配置文件
+./hdu-srun-login install --config /path/to/config.yaml
 ```
+
+### 服务管理
+
+```bash
+# 启动服务
+./hdu-srun-login start
+
+# 停止服务
+./hdu-srun-login stop
+
+# 重启服务
+./hdu-srun-login restart
+
+# 查看服务状态
+./hdu-srun-login status
+```
+
+### 卸载服务
+
+```bash
+./hdu-srun-login uninstall
+```
+
+### 配置文件路径
+
+| 平台 | 程序安装目录 | 配置文件 |
+|------|-------------|---------|
+| Windows | `%LOCALAPPDATA%\bin` | `~/hdu-srun-login.yaml` |
+| Linux | `~/.local/bin` | `~/hdu-srun-login.yaml` |
+| macOS | `~/.local/bin` | `~/hdu-srun-login.yaml` |
+
+## 跨平台编译
+
+使用 Go 的交叉编译功能，可以为不同平台构建二进制文件：
+
+### Linux / macOS (bash)
+
+```bash
+# Linux amd64
+GOOS=linux GOARCH=amd64 go build -o hdu-srun-login-linux-amd64 .
+
+# Linux arm64
+GOOS=linux GOARCH=arm64 go build -o hdu-srun-login-linux-arm64 .
+
+# Windows amd64
+GOOS=windows GOARCH=amd64 go build -o hdu-srun-login-windows-amd64.exe .
+
+# macOS amd64
+GOOS=darwin GOARCH=amd64 go build -o hdu-srun-login-darwin-amd64 .
+
+# macOS arm64 (Apple Silicon)
+GOOS=darwin GOARCH=arm64 go build -o hdu-srun-login-darwin-arm64 .
+```
+
+### Windows PowerShell
+
+```powershell
+# 编译 Linux amd64
+$env:GOOS="linux"; $env:GOARCH="amd64"; go build -o hdu-srun-login-linux-amd64 .
+
+# 编译 Linux arm64
+$env:GOOS="linux"; $env:GOARCH="arm64"; go build -o hdu-srun-login-linux-arm64 .
+```
+
+### Windows CMD
+
+```cmd
+REM 编译 Linux amd64
+set GOOS=linux
+set GOARCH=amd64
+go build -o hdu-srun-login-linux-amd64 .
+
+REM 编译 Linux arm64
+set GOOS=linux
+set GOARCH=arm64
+go build -o hdu-srun-login-linux-arm64 .
+```
+
+使用 `go tool dist list` 查看所有支持的平台。
 
 ## License
 

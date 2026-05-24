@@ -6,6 +6,6 @@ venv/
 .gocache/
 .gopath/
 srun-login-go
-srun_login.log
-srun_login.log.1
+hdu-srun-login*
+hdu-srun-login.log
 config.yaml
