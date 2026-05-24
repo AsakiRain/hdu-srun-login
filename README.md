@@ -123,6 +123,9 @@ GOOS=darwin GOARCH=amd64 go build -o hdu-srun-login-darwin-amd64 .
 
 # macOS arm64 (Apple Silicon)
 GOOS=darwin GOARCH=arm64 go build -o hdu-srun-login-darwin-arm64 .
+
+# Linux mipsle (嵌入式路由器等)
+GOOS=linux GOARCH=mipsle go build -o hdu-srun-login-linux-mipsle .
 ```
 
 ### Windows PowerShell
@@ -133,6 +136,9 @@ $env:GOOS="linux"; $env:GOARCH="amd64"; go build -o hdu-srun-login-linux-amd64 .
 
 # 编译 Linux arm64
 $env:GOOS="linux"; $env:GOARCH="arm64"; go build -o hdu-srun-login-linux-arm64 .
+
+# 编译 Linux mipsle
+$env:GOOS="linux"; $env:GOARCH="mipsle"; go build -o hdu-srun-login-linux-mipsle .
 ```
 
 ### Windows CMD
@@ -147,6 +153,11 @@ REM 编译 Linux arm64
 set GOOS=linux
 set GOARCH=arm64
 go build -o hdu-srun-login-linux-arm64 .
+
+REM 编译 Linux mipsle
+set GOOS=linux
+set GOARCH=mipsle
+go build -o hdu-srun-login-linux-mipsle .
 ```
 
 使用 `go tool dist list` 查看所有支持的平台。

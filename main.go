@@ -71,7 +71,7 @@ func DefaultConfig() Config {
 		Log: LogConfig{
 			ConsoleLevel: "info",
 			FileLevel:    "debug",
-			LogFile:      "srun_login.log",
+			LogFile:      "hdu-srun-login.log",
 			MaxSizeMB:    10,
 			MaxBackups:   5,
 			ShowCaller:   false,
