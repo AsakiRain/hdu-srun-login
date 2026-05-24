@@ -1,4 +1,4 @@
-# srun-login-go
+# hdu-srun-login
 
 杭州电子科技大学校园网 Wi-Fi 登录 / 深澜（srun）校园网模拟登录
 
@@ -18,33 +18,28 @@
 需要 Go 1.22 或更高版本。
 
 ```bash
-git clone git@github.com:JBNRZ/srun-login-go.git
-cd srun-login-go && go build -o srun-login-go .
+git clone https://github.com/AsakiRain/hdu-srun-login.git
+cd hdu-srun-login && go build -o hdu-srun-login .
 ```
 
-创建 `auth.json`：
+创建 `config.yaml`：
 
 ```bash
-cat<<EOF>auth.json
-[
-  {"username": "username1", "password": "password1"},
-  {"username": "username2", "password": "password2"},
-  {"username": "username3", "password": "password3"} 
-]
-EOF
+cp config.example.yaml config.yaml
+# 编辑 config.yaml 填入账号密码
 ```
 
 运行：
 
 ```bash
-nohup ./srun-login-go &
+nohup ./hdu-srun-login &
 ```
 
 常用参数：
 
 ```bash
-./srun-login-go \
-  -config auth.json \
+./hdu-srun-login \
+  -config config.yaml \
   -check-interval 2m \
   -refresh-interval 6h
 ```

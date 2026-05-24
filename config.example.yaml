@@ -1,0 +1,38 @@
+# SRun Login Configuration Example
+
+# 账号密码配置
+accounts:
+  - username: "your_username_1"
+    password: "your_password_1"
+
+  - username: "your_username_2"
+    password: "your_password_2"
+
+# 状态检查间隔（默认: 2m，支持: 30s, 1m, 5m, 10m 等）
+check_interval: "2m"
+
+# 登出/登录刷新间隔（默认: 6h，支持: 1h, 12h, 24h 等，设为 0 可关闭）
+refresh_interval: "6h"
+
+# 是否只检查一次（默认: false，设为 true 时执行一次检查后退出）
+once: false
+
+# 绑定网卡名称列表（可选，指定后HTTP请求将通过指定网卡发送，忽略默认路由）
+# bind_interfaces:
+#   - "Wi-Fi"
+#   - "eth0"
+
+# 日志配置
+log:
+  # 控制台日志级别（默认: info，可选: debug, info, warn, error）
+  console_level: "info"
+  # 文件日志级别（默认: debug，可选: debug, info, warn, error）
+  file_level: "debug"
+  # 日志文件路径（默认: srun_login.log）
+  log_file: "srun_login.log"
+  # 日志文件最大大小（MB，默认: 10）
+  max_size_mb: 10
+  # 保留的日志文件数量（默认: 5）
+  max_backups: 5
+  # 是否显示调用者信息（默认: false）
+  show_caller: false

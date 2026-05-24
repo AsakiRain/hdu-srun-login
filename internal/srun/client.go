@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -29,8 +30,8 @@ var defaultHosts = []string{
 var ipPattern = regexp.MustCompile(`((1\d{2}|25[0-5]|2[0-4]\d|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)`)
 
 type Auth struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username string `json:"username" yaml:"username"`
+	Password string `json:"password" yaml:"password"`
 }
 
 type Logger interface {
@@ -42,9 +43,10 @@ type noopLogger struct{}
 func (noopLogger) Logf(string, string, ...any) {}
 
 type Client struct {
-	httpClient *http.Client
-	logger     Logger
-	rand       *rand.Rand
+	httpClient     *http.Client
+	logger         Logger
+	rand           *rand.Rand
+	bindInterfaces []string
 
 	Host     string
 	Username string
@@ -70,7 +72,7 @@ type challengeResponse struct {
 	ErrorMsg  string `json:"error_msg"`
 }
 
-func NewClient(username, password string, logger Logger) (*Client, error) {
+func NewClient(username, password string, logger Logger, bindInterfaces []string) (*Client, error) {
 	if logger == nil {
 		logger = noopLogger{}
 	}
@@ -78,18 +80,70 @@ func NewClient(username, password string, logger Logger) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	var transport http.RoundTripper
+	if len(bindInterfaces) > 0 {
+		transport = &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				var lastErr error
+				for _, ifaceName := range bindInterfaces {
+					iface, err := net.InterfaceByName(ifaceName)
+					if err != nil {
+						lastErr = fmt.Errorf("interface %s: %w", ifaceName, err)
+						continue
+					}
+					addrs, err := iface.Addrs()
+					if err != nil || len(addrs) == 0 {
+						lastErr = fmt.Errorf("interface %s: no addresses", ifaceName)
+						continue
+					}
+					// 找到第一个 IPv4 地址
+					var localIP net.IP
+					for _, addr := range addrs {
+						if ipNet, ok := addr.(*net.IPNet); ok && ipNet.IP.To4() != nil {
+							localIP = ipNet.IP
+							break
+						}
+					}
+					if localIP == nil {
+						lastErr = fmt.Errorf("interface %s: no IPv4 address", ifaceName)
+						continue
+					}
+
+					dialer := &net.Dialer{
+						LocalAddr: &net.TCPAddr{IP: localIP},
+						Timeout:   10 * time.Second,
+					}
+					conn, err := dialer.DialContext(ctx, network, addr)
+					if err == nil {
+						return conn, nil
+					}
+					lastErr = err
+				}
+				return nil, fmt.Errorf("failed to dial via any interface: %w", lastErr)
+			},
+		}
+	}
+
+	// 当 transport 为 nil 时，显式使用 DefaultTransport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+
 	return &Client{
 		httpClient: &http.Client{
-			Jar:     jar,
-			Timeout: 10 * time.Second,
+			Jar:       jar,
+			Timeout:   10 * time.Second,
+			Transport: transport,
 		},
-		logger:   logger,
-		rand:     rand.New(rand.NewSource(time.Now().UnixNano())),
-		Username: username,
-		Password: password,
-		n:        "200",
-		vtype:    "1",
-		encVer:   "srun_bx1",
+		logger:         logger,
+		rand:           rand.New(rand.NewSource(time.Now().UnixNano())),
+		Username:       username,
+		Password:       password,
+		bindInterfaces: bindInterfaces,
+		n:              "200",
+		vtype:          "1",
+		encVer:         "srun_bx1",
 	}, nil
 }
 
@@ -100,13 +154,13 @@ func (c *Client) ensureHost(ctx context.Context) error {
 	for _, host := range defaultHosts {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, host, nil)
 		if err != nil {
-			c.logger.Logf("INFO", "Host %s %v", host, err)
+			c.logger.Logf("DEBUG", "Host %s unreachable: %v", host, err)
 			continue
 		}
 		req.Header.Set("User-Agent", userAgent)
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
-			c.logger.Logf("INFO", "Host %s %v", host, err)
+			c.logger.Logf("DEBUG", "Host %s unreachable: %v", host, err)
 			continue
 		}
 		_, _ = io.Copy(io.Discard, resp.Body)
@@ -115,7 +169,7 @@ func (c *Client) ensureHost(ctx context.Context) error {
 			c.Host = host
 			return nil
 		}
-		c.logger.Logf("INFO", "Host %s status %s", host, resp.Status)
+		c.logger.Logf("DEBUG", "Host %s returned status %s, trying next...", host, resp.Status)
 	}
 	return errors.New("failed to get host")
 }
@@ -190,7 +244,7 @@ func (c *Client) GetIP(ctx context.Context) (string, error) {
 		case <-time.After(time.Second):
 		}
 	}
-	c.logger.Logf("ERROR", "Failed to get IP")
+	c.logger.Logf("ERROR", "Failed to get IP after 3 retries: %v", lastErr)
 	return "", lastErr
 }
 
@@ -216,7 +270,7 @@ func (c *Client) GetToken(ctx context.Context, ip string) (string, error) {
 		}
 		return "", errors.New("challenge is empty")
 	}
-	c.logger.Logf("INFO", "Token: %s", result.Challenge)
+	c.logger.Logf("DEBUG", "Got challenge token: %s", result.Challenge)
 	return result.Challenge, nil
 }
 
@@ -247,78 +301,70 @@ func (c *Client) getChecksum(ip, token, info string) string {
 }
 
 func (c *Client) Login(ctx context.Context) (map[string]any, error) {
-	for {
-		ip, err := c.GetIP(ctx)
-		if err != nil {
-			return nil, err
-		}
-		token, err := c.GetToken(ctx, ip)
-		if err != nil {
-			return nil, err
-		}
-		info, err := c.getInfo(ip, token)
-		if err != nil {
-			return nil, err
-		}
-		checksum := c.getChecksum(ip, token, info)
-		callback := fmt.Sprintf("jQuery1124015280105355320628_%d", nowMillis())
-		device := devices[c.rand.Intn(len(devices))]
+	ip, err := c.GetIP(ctx)
+	if err != nil {
+		return nil, err
+	}
+	token, err := c.GetToken(ctx, ip)
+	if err != nil {
+		return nil, err
+	}
+	info, err := c.getInfo(ip, token)
+	if err != nil {
+		return nil, err
+	}
+	checksum := c.getChecksum(ip, token, info)
+	callback := fmt.Sprintf("jQuery1124015280105355320628_%d", nowMillis())
+	device := devices[c.rand.Intn(len(devices))]
 
-		body, err := c.get(ctx, "/cgi-bin/srun_portal", url.Values{
-			"callback":     {callback},
-			"action":       {"login"},
-			"username":     {c.Username},
-			"password":     {"{MD5}" + hmacMD5(c.Password, token)},
-			"os":           {device[0]},
-			"name":         {device[1]},
-			"double_stack": {"0"},
-			"chksum":       {checksum},
-			"info":         {info},
-			"ac_id":        {fmt.Sprint(c.acid)},
-			"ip":           {ip},
-			"n":            {c.n},
-			"type":         {c.vtype},
-			"_":            {fmt.Sprint(nowMillis())},
-		})
-		if err != nil {
-			return nil, err
-		}
+	body, err := c.get(ctx, "/cgi-bin/srun_portal", url.Values{
+		"callback":     {callback},
+		"action":       {"login"},
+		"username":     {c.Username},
+		"password":     {"{MD5}" + hmacMD5(c.Password, token)},
+		"os":           {device[0]},
+		"name":         {device[1]},
+		"double_stack": {"0"},
+		"chksum":       {checksum},
+		"info":         {info},
+		"ac_id":        {fmt.Sprint(c.acid)},
+		"ip":           {ip},
+		"n":            {c.n},
+		"type":         {c.vtype},
+		"_":            {fmt.Sprint(nowMillis())},
+	})
+	if err != nil {
+		return nil, err
+	}
 
-		var result map[string]any
-		if err := decodeJSONP(body, callback, &result); err != nil {
-			return nil, err
-		}
+	var result map[string]any
+	if err := decodeJSONP(body, callback, &result); err != nil {
+		return nil, err
+	}
 
-		if sucMsg := stringValue(result, "suc_msg"); sucMsg != "" {
-			c.logger.Logf("SUCCESS", "login: %s %s %s %s", sucMsg, c.Username, c.Password, stringValue(result, "online_ip"))
-			return result, nil
-		}
-
-		errCode := stringValue(result, "error")
-		errMsg := stringValue(result, "error_msg")
-		c.logger.Logf("ERROR", "%s: %s", errCode, errMsg)
-
-		if strings.Contains(errMsg, "BAS") || strings.Contains(errMsg, "Nas") {
-			c.logger.Logf("ERROR", "ac_id error, retry in 5 seconds...")
-			c.acid++
-			select {
-			case <-ctx.Done():
-				return result, ctx.Err()
-			case <-time.After(5 * time.Second):
-			}
-			continue
-		}
-
-		if strings.Contains(errMsg, "E2901") {
-			c.logger.Logf("ERROR", "username or password error...")
-			result["error_msg"] = "4xx"
-		} else if strings.Contains(errMsg, "E2606") {
-			c.logger.Logf("ERROR", "user is disabled...")
-			result["error_msg"] = "4xx"
-		}
-
+	if sucMsg := stringValue(result, "suc_msg"); sucMsg != "" {
+		c.logger.Logf("INFO", "Login successful: user=%s, ip=%s", c.Username, stringValue(result, "online_ip"))
 		return result, nil
 	}
+
+	errCode := stringValue(result, "error")
+	errMsg := stringValue(result, "error_msg")
+	c.logger.Logf("ERROR", "Login failed: code=%s, message=%s", errCode, errMsg)
+
+	if strings.Contains(errMsg, "BAS") || strings.Contains(errMsg, "Nas") {
+		c.logger.Logf("ERROR", "Invalid ac_id (current=%d), please check configuration", c.acid)
+		return result, fmt.Errorf("login failed: invalid ac_id=%d", c.acid)
+	}
+
+	if strings.Contains(errMsg, "E2901") {
+		return result, fmt.Errorf("login failed: invalid username or password for user %s", c.Username)
+	}
+
+	if strings.Contains(errMsg, "E2606") {
+		return result, fmt.Errorf("login failed: user account %s is disabled", c.Username)
+	}
+
+	return result, nil
 }
 
 func (c *Client) Logout(ctx context.Context) (map[string]any, error) {
@@ -358,7 +404,7 @@ func (c *Client) Logout(ctx context.Context) (map[string]any, error) {
 	if err := decodeJSONP(body, callback, &result); err != nil {
 		return nil, err
 	}
-	c.logger.Logf("INFO", "logout: %s", stringValue(result, "error"))
+	c.logger.Logf("INFO", "Logout result: %s (user=%s, ip=%s)", stringValue(result, "error"), username, ip)
 	return result, nil
 }
 
@@ -376,7 +422,11 @@ func (c *Client) Check(ctx context.Context) (map[string]any, error) {
 	if err := decodeJSONP(body, callback, &result); err != nil {
 		return nil, err
 	}
-	c.logger.Logf("INFO", "check: %s", stringValue(result, "error"))
+	if stringValue(result, "error") == "ok" {
+		c.logger.Logf("INFO", "Status check: online (user=%s, ip=%s)", stringValue(result, "user_name"), stringValue(result, "online_ip"))
+	} else {
+		c.logger.Logf("DEBUG", "Status check: not online (%s)", stringValue(result, "error"))
+	}
 	return result, nil
 }
 

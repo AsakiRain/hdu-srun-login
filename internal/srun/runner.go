@@ -8,20 +8,22 @@ import (
 )
 
 type Runner struct {
-	auths  []Auth
-	logger Logger
-	rand   *rand.Rand
-	mu     sync.Mutex
+	auths          []Auth
+	logger         Logger
+	rand           *rand.Rand
+	mu             sync.Mutex
+	bindInterfaces []string
 }
 
-func NewRunner(auths []Auth, logger Logger) *Runner {
+func NewRunner(auths []Auth, logger Logger, bindInterfaces []string) *Runner {
 	if logger == nil {
 		logger = noopLogger{}
 	}
 	return &Runner{
-		auths:  append([]Auth(nil), auths...),
-		logger: logger,
-		rand:   rand.New(rand.NewSource(time.Now().UnixNano())),
+		auths:          append([]Auth(nil), auths...),
+		logger:         logger,
+		rand:           rand.New(rand.NewSource(time.Now().UnixNano())),
+		bindInterfaces: bindInterfaces,
 	}
 }
 
@@ -33,9 +35,9 @@ func (r *Runner) Refresh(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.logger.Logf("DEBUG", "Try to refresh...")
+	r.logger.Logf("INFO", "Refreshing login session...")
 	auth := r.randomAuth()
-	client, err := NewClient(auth.Username, auth.Password, r.logger)
+	client, err := NewClient(auth.Username, auth.Password, r.logger, r.bindInterfaces)
 	if err != nil {
 		return err
 	}
@@ -43,33 +45,16 @@ func (r *Runner) Refresh(ctx context.Context) error {
 		return err
 	}
 
-	for {
-		result, err := client.Login(ctx)
-		if err != nil {
-			return err
-		}
-		if stringValue(result, "error_msg") != "4xx" {
-			return nil
-		}
-
-		auth = r.randomAuth()
-		client.Username = auth.Username
-		client.Password = auth.Password
-		r.logger.Logf("DEBUG", "username or password is incorrect, retry in 2 seconds...")
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(2 * time.Second):
-		}
-	}
+	_, err = client.Login(ctx)
+	return err
 }
 
 func (r *Runner) Check(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.logger.Logf("DEBUG", "Check status...")
-	client, err := NewClient("", "", r.logger)
+	r.logger.Logf("INFO", "Checking online status...")
+	client, err := NewClient("", "", r.logger, r.bindInterfaces)
 	if err != nil {
 		return err
 	}
@@ -78,27 +63,14 @@ func (r *Runner) Check(ctx context.Context) error {
 		return err
 	}
 	if stringValue(status, "error") == "ok" {
+		r.logger.Logf("INFO", "Already online (user: %s, ip: %s)", stringValue(status, "user_name"), stringValue(status, "online_ip"))
 		return nil
 	}
 
-	r.logger.Logf("WARNING", "%s, try to login...", stringValue(status, "error"))
-	for {
-		auth := r.randomAuth()
-		client.Username = auth.Username
-		client.Password = auth.Password
-		result, err := client.Login(ctx)
-		if err != nil {
-			return err
-		}
-		if stringValue(result, "error_msg") != "4xx" {
-			return nil
-		}
-
-		r.logger.Logf("DEBUG", "username or password is incorrect, retry in 2 seconds...")
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(2 * time.Second):
-		}
-	}
+	r.logger.Logf("WARNING", "Not online (%s), attempting login...", stringValue(status, "error"))
+	auth := r.randomAuth()
+	client.Username = auth.Username
+	client.Password = auth.Password
+	_, err = client.Login(ctx)
+	return err
 }
