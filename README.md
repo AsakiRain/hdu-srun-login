@@ -2,16 +2,16 @@
 
 杭州电子科技大学校园网 Wi-Fi 登录 / 深澜（srun）校园网模拟登录
 
-基于 Go 的深澜校园网自动登录工具，适配 2024 年暑假后的杭州电子科技大学校园网认证，支持生活区和教学区登录认证，支持多用户账号定时切换登录。
+基于 Go 的深澜校园网自动登录工具，适配 2024 年暑假后的杭州电子科技大学校园网认证，支持生活区和教学区登录认证。
 
 ## 功能
 
 - 自动探测可用认证入口
 - 自动获取本机校园网 IP
 - 定时检查在线状态，默认每 2 分钟检查一次
+- 可选网络环境变化检测，适合经常切换网络的笔记本
 - 定时刷新登录，默认每 6 小时注销并重新登录一次
-- 多账号随机重试，适合账号池轮换
-- 写入 `srun_login.log`，日志达到 10 MB 后轮转
+- 写入 `srun_login.log`，支持调试时开启实时 flush，日志达到 10 MB 后轮转
 - 支持安装为系统服务（Windows/Linux/macOS）
 
 ## 开始使用
@@ -62,7 +62,7 @@ nohup ./hdu-srun-login &
 ### 安装服务
 
 ```bash
-# 默认安装（程序到用户 bin 目录，配置到 ~/hdu-srun-login.yaml）
+# 默认安装（直接注册当前可执行文件，配置到当前可执行文件同目录 config.yaml）
 ./hdu-srun-login install
 
 # 指定程序安装目录
@@ -98,9 +98,9 @@ nohup ./hdu-srun-login &
 
 | 平台 | 程序安装目录 | 配置文件 |
 |------|-------------|---------|
-| Windows | `%LOCALAPPDATA%\bin` | `~/hdu-srun-login.yaml` |
-| Linux | `~/.local/bin` | `~/hdu-srun-login.yaml` |
-| macOS | `~/.local/bin` | `~/hdu-srun-login.yaml` |
+| Windows | 当前 `hdu-srun-login.exe` 所在目录 | 当前可执行文件同目录的 `config.yaml` |
+| Linux | 当前 `hdu-srun-login` 所在目录 | 当前可执行文件同目录的 `config.yaml` |
+| macOS | 当前 `hdu-srun-login` 所在目录 | 当前可执行文件同目录的 `config.yaml` |
 
 ## 跨平台编译
 

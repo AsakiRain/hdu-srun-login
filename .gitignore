@@ -5,6 +5,7 @@ venv/
 *.log
 .gocache/
 .gopath/
+build/
 srun-login-go
 hdu-srun-login*
 hdu-srun-login.log

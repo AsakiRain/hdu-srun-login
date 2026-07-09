@@ -45,12 +45,14 @@ func (l *srunLogger) Logf(level string, format string, args ...any) {
 
 // Config represents the configuration file structure
 type Config struct {
-	Accounts        []srun.Auth `yaml:"accounts" json:"accounts"`
-	CheckInterval   string      `yaml:"check_interval" json:"check_interval"`
-	RefreshInterval string      `yaml:"refresh_interval" json:"refresh_interval"`
-	Once            bool        `yaml:"once" json:"once"`
-	BindInterfaces  []string    `yaml:"bind_interfaces" json:"bind_interfaces"`
-	Log             LogConfig   `yaml:"log" json:"log"`
+	Username         string    `yaml:"username" json:"username"`
+	Password         string    `yaml:"password" json:"password"`
+	CheckInterval    string    `yaml:"check_interval" json:"check_interval"`
+	RefreshInterval  string    `yaml:"refresh_interval" json:"refresh_interval"`
+	Once             bool      `yaml:"once" json:"once"`
+	NetworkDetection bool      `yaml:"network_detection" json:"network_detection"`
+	BindInterfaces   []string  `yaml:"bind_interfaces" json:"bind_interfaces"`
+	Log              LogConfig `yaml:"log" json:"log"`
 }
 
 // LogConfig represents the logger configuration
@@ -60,6 +62,7 @@ type LogConfig struct {
 	LogFile      string `yaml:"log_file" json:"log_file"`
 	MaxSizeMB    int    `yaml:"max_size_mb" json:"max_size_mb"`
 	MaxBackups   int    `yaml:"max_backups" json:"max_backups"`
+	Flush        bool   `yaml:"flush" json:"flush"`
 	ShowCaller   bool   `yaml:"show_caller" json:"show_caller"`
 }
 
@@ -79,7 +82,7 @@ func DefaultConfig() Config {
 	}
 }
 
-func loadConfig(path string) (Config, error) {
+func parseConfig(path string) (Config, error) {
 	cfg := DefaultConfig()
 
 	data, err := os.ReadFile(path)
@@ -105,29 +108,52 @@ func loadConfig(path string) (Config, error) {
 		}
 	}
 
-	// 向后兼容：如果 accounts 为空，尝试直接解析为数组
-	if len(cfg.Accounts) == 0 {
-		var auths []srun.Auth
-		switch ext {
-		case ".yaml", ".yml":
-			_ = yaml.Unmarshal(data, &auths)
-		case ".json":
-			_ = json.Unmarshal(data, &auths)
-		default:
-			_ = yaml.Unmarshal(data, &auths)
-		}
-		cfg.Accounts = auths
-	}
-
-	if len(cfg.Accounts) == 0 {
-		return cfg, errors.New("auth list is empty")
-	}
-	for i, auth := range cfg.Accounts {
-		if auth.Username == "" || auth.Password == "" {
-			return cfg, fmt.Errorf("auth[%d] must include username and password", i)
-		}
-	}
 	return cfg, nil
+}
+
+func validateConfig(cfg Config) error {
+	if cfg.Username == "" || cfg.Password == "" {
+		return errors.New("config must include username and password")
+	}
+	return nil
+}
+
+func loadConfig(path string) (Config, error) {
+	cfg, err := parseConfig(path)
+	if err != nil {
+		return cfg, err
+	}
+	return cfg, validateConfig(cfg)
+}
+
+func resolveLogFile(logFile string) string {
+	if logFile == "" || filepath.IsAbs(logFile) {
+		return logFile
+	}
+	execPath, err := os.Executable()
+	if err != nil {
+		return logFile
+	}
+	return filepath.Join(filepath.Dir(execPath), logFile)
+}
+
+func newLogger(cfg Config, flagLogFile string) *logger.Logger {
+	logFile := cfg.Log.LogFile
+	if flagLogFile != "" {
+		logFile = flagLogFile
+	}
+	logFile = resolveLogFile(logFile)
+
+	return logger.New(logger.Config{
+		ConsoleLevel: cfg.Log.ConsoleLevel,
+		FileLevel:    cfg.Log.FileLevel,
+		LogFile:      logFile,
+		MaxSize:      cfg.Log.MaxSizeMB,
+		MaxBackups:   cfg.Log.MaxBackups,
+		Flush:        cfg.Log.Flush,
+		DefaultTag:   "srun_login",
+		ShowCaller:   cfg.Log.ShowCaller,
+	})
 }
 
 func printUsage() {
@@ -205,11 +231,19 @@ func handleStatus(args []string) {
 	}
 }
 
-func run(configPath string, once bool, flagCheckInterval, flagRefreshInterval time.Duration, flagLogFile string) {
-	cfg, err := loadConfig(configPath)
+func runWithContext(ctx context.Context, configPath string, once bool, flagCheckInterval, flagRefreshInterval time.Duration, flagLogFile string) error {
+	cfg, err := parseConfig(configPath)
+	log := newLogger(cfg, flagLogFile)
+	defer log.Close()
+	sLog := &srunLogger{Logger: log}
+
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
-		os.Exit(1)
+		sLog.Logf("ERROR", "load config failed: %v", err)
+		return fmt.Errorf("load config: %w", err)
+	}
+	if err := validateConfig(cfg); err != nil {
+		sLog.Logf("ERROR", "invalid config %s: %v", configPath, err)
+		return err
 	}
 
 	// 命令行参数覆盖配置文件
@@ -231,86 +265,45 @@ func run(configPath string, once bool, flagCheckInterval, flagRefreshInterval ti
 		refreshInterval = flagRefreshInterval
 	}
 
-	logFile := cfg.Log.LogFile
-	// 如果日志文件路径是相对路径，相对于可执行文件所在目录
-	if logFile != "" && !filepath.IsAbs(logFile) {
-		execPath, err := os.Executable()
-		if err == nil {
-			execDir := filepath.Dir(execPath)
-			logFile = filepath.Join(execDir, logFile)
-		}
-	}
-	if flagLogFile != "" {
-		logFile = flagLogFile
-		// 命令行指定的路径如果是相对路径，也相对于可执行文件所在目录
-		if !filepath.IsAbs(logFile) {
-			execPath, err := os.Executable()
-			if err == nil {
-				execDir := filepath.Dir(execPath)
-				logFile = filepath.Join(execDir, logFile)
-			}
-		}
-	}
+	sLog.Logf("INFO", "Process started (config: %s, check: %v, refresh: %v, once: %v, network_detection: %v, bind_interfaces: %v)", configPath, checkInterval, refreshInterval, once, cfg.NetworkDetection, cfg.BindInterfaces)
 
-	// 初始化日志库
-	logCfg := logger.Config{
-		ConsoleLevel: cfg.Log.ConsoleLevel,
-		FileLevel:    cfg.Log.FileLevel,
-		LogFile:      logFile,
-		MaxSize:      cfg.Log.MaxSizeMB,
-		MaxBackups:   cfg.Log.MaxBackups,
-		DefaultTag:   "srun_login",
-		ShowCaller:   cfg.Log.ShowCaller,
-	}
-	log := logger.New(logCfg)
-	defer log.Close()
-
-	sLog := &srunLogger{Logger: log}
-	sLog.Logf("INFO", "Process started (config: %s, check: %v, refresh: %v, once: %v, bind_interfaces: %v)", configPath, checkInterval, refreshInterval, once, cfg.BindInterfaces)
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	runner := srun.NewRunner(cfg.Accounts, sLog, cfg.BindInterfaces)
+	runner := srun.NewRunner(srun.Auth{Username: cfg.Username, Password: cfg.Password}, sLog, cfg.BindInterfaces)
 
 	if once {
 		if err := runner.Check(ctx); err != nil {
 			sLog.Logf("ERROR", "check failed: %v", err)
-			os.Exit(1)
+			return err
 		}
-		return
+		return nil
 	}
 
-	checkTicker := time.NewTicker(checkInterval)
-	defer checkTicker.Stop()
-
-	// 使用 nil channel 来禁用刷新逻辑（当 refreshInterval 为 0 时）
-	var refreshTicker *time.Ticker
-	var refreshChan <-chan time.Time
-	if refreshInterval > 0 {
-		refreshTicker = time.NewTicker(refreshInterval)
-		refreshChan = refreshTicker.C
-		defer refreshTicker.Stop()
+	var networkEvents <-chan struct{}
+	if cfg.NetworkDetection {
+		sLog.Logf("INFO", "Network environment detection enabled")
+		networkEvents = srun.NewNetworkWatcher(sLog).Watch(ctx)
+	} else {
+		sLog.Logf("INFO", "Network environment detection disabled; using scheduled checks only")
 	}
-
-	if err := runner.Check(ctx); err != nil {
-		sLog.Logf("ERROR", "check failed: %v", err)
+	scheduler := &srun.Scheduler{
+		Check:               runner.Check,
+		Refresh:             runner.Refresh,
+		Network:             networkEvents,
+		Logger:              sLog,
+		CheckInterval:       checkInterval,
+		RefreshInterval:     refreshInterval,
+		UnreachableInterval: srun.DefaultUnreachableCheckInterval,
 	}
+	scheduler.Run(ctx)
+	return nil
+}
 
-	for {
-		select {
-		case <-ctx.Done():
-			sLog.Logf("INFO", "Process stopped")
-			return
-		case <-checkTicker.C:
-			if err := runner.Check(ctx); err != nil {
-				sLog.Logf("ERROR", "check failed: %v", err)
-			}
-		case <-refreshChan:
-			if err := runner.Refresh(ctx); err != nil {
-				sLog.Logf("ERROR", "refresh failed: %v", err)
-			}
-		}
+func run(configPath string, once bool, flagCheckInterval, flagRefreshInterval time.Duration, flagLogFile string) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := runWithContext(ctx, configPath, once, flagCheckInterval, flagRefreshInterval, flagLogFile); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
 	}
 }
 
@@ -354,9 +347,8 @@ func main() {
 	// 服务模式
 	if *flagService {
 		// 设置服务运行时的回调函数
-		service.RunFunc = func(configPath string) error {
-			run(configPath, false, 0, 0, "")
-			return nil
+		service.RunFunc = func(ctx context.Context, configPath string) error {
+			return runWithContext(ctx, configPath, false, 0, 0, "")
 		}
 		if err := service.Run(*configPath); err != nil {
 			fmt.Fprintf(os.Stderr, "service run error: %v\n", err)

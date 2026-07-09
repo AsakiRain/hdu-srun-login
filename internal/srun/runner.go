@@ -2,33 +2,25 @@ package srun
 
 import (
 	"context"
-	"math/rand"
 	"sync"
-	"time"
 )
 
 type Runner struct {
-	auths          []Auth
+	auth           Auth
 	logger         Logger
-	rand           *rand.Rand
 	mu             sync.Mutex
 	bindInterfaces []string
 }
 
-func NewRunner(auths []Auth, logger Logger, bindInterfaces []string) *Runner {
+func NewRunner(auth Auth, logger Logger, bindInterfaces []string) *Runner {
 	if logger == nil {
 		logger = noopLogger{}
 	}
 	return &Runner{
-		auths:          append([]Auth(nil), auths...),
+		auth:           auth,
 		logger:         logger,
-		rand:           rand.New(rand.NewSource(time.Now().UnixNano())),
 		bindInterfaces: bindInterfaces,
 	}
-}
-
-func (r *Runner) randomAuth() Auth {
-	return r.auths[r.rand.Intn(len(r.auths))]
 }
 
 func (r *Runner) Refresh(ctx context.Context) error {
@@ -36,8 +28,7 @@ func (r *Runner) Refresh(ctx context.Context) error {
 	defer r.mu.Unlock()
 
 	r.logger.Logf("INFO", "Refreshing login session...")
-	auth := r.randomAuth()
-	client, err := NewClient(auth.Username, auth.Password, r.logger, r.bindInterfaces)
+	client, err := NewClient(r.auth.Username, r.auth.Password, r.logger, r.bindInterfaces)
 	if err != nil {
 		return err
 	}
@@ -63,14 +54,12 @@ func (r *Runner) Check(ctx context.Context) error {
 		return err
 	}
 	if stringValue(status, "error") == "ok" {
-		r.logger.Logf("INFO", "Already online (user: %s, ip: %s)", stringValue(status, "user_name"), stringValue(status, "online_ip"))
 		return nil
 	}
 
 	r.logger.Logf("WARNING", "Not online (%s), attempting login...", stringValue(status, "error"))
-	auth := r.randomAuth()
-	client.Username = auth.Username
-	client.Password = auth.Password
+	client.Username = r.auth.Username
+	client.Password = r.auth.Password
 	_, err = client.Login(ctx)
 	return err
 }

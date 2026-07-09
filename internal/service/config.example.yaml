@@ -1,12 +1,8 @@
 # SRun Login Configuration Example
 
 # 账号密码配置
-accounts:
-  - username: "your_username_1"
-    password: "your_password_1"
-
-  - username: "your_username_2"
-    password: "your_password_2"
+username: "your_username"
+password: "your_password"
 
 # 状态检查间隔（默认: 2m，支持: 30s, 1m, 5m, 10m 等）
 check_interval: "2m"
@@ -16,6 +12,10 @@ refresh_interval: "6h"
 
 # 是否只检查一次（默认: false，设为 true 时执行一次检查后退出）
 once: false
+
+# 是否启用网络环境变化检测（默认: false）
+# 笔记本等经常切换网络的设备可设为 true；常驻校园网设备保持 false 即可。
+network_detection: false
 
 # 绑定网卡名称列表（可选，指定后HTTP请求将通过指定网卡发送，忽略默认路由）
 # bind_interfaces:
@@ -34,5 +34,7 @@ log:
   max_size_mb: 10
   # 保留的日志文件数量（默认: 5）
   max_backups: 5
+  # 是否每次写入文件日志后立即 flush 到磁盘（默认: false，调试时建议开启）
+  flush: false
   # 是否显示调用者信息（默认: false）
   show_caller: false

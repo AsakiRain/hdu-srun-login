@@ -1,5 +1,5 @@
-github.com/AsakiRain/logger-go v1.0.0 h1:OB+2vyIuQgmPqlGBv1767eMB5YeYEQx5s/h3qUltU9Y=
-github.com/AsakiRain/logger-go v1.0.0/go.mod h1:SMtoIgO51wln5jq0MOxpTy0M8hkK2q512zCM7ba3lHs=
+github.com/AsakiRain/logger-go v1.0.1 h1:cXxToYXifP6Ye/QzzuLZiMcgH+WqG7B6bk+BDTxq50A=
+github.com/AsakiRain/logger-go v1.0.1/go.mod h1:SMtoIgO51wln5jq0MOxpTy0M8hkK2q512zCM7ba3lHs=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/kardianos/service v1.2.4 h1:XNlGtZOYNx2u91urOdg/Kfmc+gfmuIo1Dd3rEi2OgBk=

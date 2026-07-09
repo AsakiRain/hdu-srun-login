@@ -27,6 +27,8 @@ var defaultHosts = []string{
 	"http://192.168.112.97",
 }
 
+var ErrNoLoginHost = errors.New("no reachable srun login host")
+
 var ipPattern = regexp.MustCompile(`((1\d{2}|25[0-5]|2[0-4]\d|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)`)
 
 type Auth struct {
@@ -171,7 +173,7 @@ func (c *Client) ensureHost(ctx context.Context) error {
 		}
 		c.logger.Logf("DEBUG", "Host %s returned status %s, trying next...", host, resp.Status)
 	}
-	return errors.New("failed to get host")
+	return ErrNoLoginHost
 }
 
 func (c *Client) get(ctx context.Context, path string, params url.Values) ([]byte, error) {

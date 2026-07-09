@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/kardianos/service"
 )
@@ -17,6 +19,8 @@ import (
 var configExample embed.FS
 
 const serviceName = "hdu-srun-login"
+
+var exitProcess = os.Exit
 
 // InstallOptions 安装选项
 type InstallOptions struct {
@@ -50,6 +54,11 @@ func GetDefaultConfigPath() (string, error) {
 	return filepath.Join(homeDir, "hdu-srun-login.yaml"), nil
 }
 
+// GetInstallConfigPath 获取服务安装时的默认配置文件路径（程序同目录 config.yaml）
+func GetInstallConfigPath(targetExec string) string {
+	return filepath.Join(filepath.Dir(targetExec), "config.yaml")
+}
+
 // GetExecutablePath 获取安装后的可执行文件路径
 func GetExecutablePath(binDir string) (string, error) {
 	if binDir == "" {
@@ -64,6 +73,24 @@ func GetExecutablePath(binDir string) (string, error) {
 		return filepath.Join(binDir, serviceName+".exe"), nil
 	}
 	return filepath.Join(binDir, serviceName), nil
+}
+
+func getInstallPaths(opts InstallOptions, currentExec string) (targetExec, configPath string, shouldCopy bool, err error) {
+	if opts.BinDir == "" {
+		targetExec = currentExec
+	} else {
+		targetExec, err = GetExecutablePath(opts.BinDir)
+		if err != nil {
+			return "", "", false, fmt.Errorf("get executable path: %w", err)
+		}
+		shouldCopy = true
+	}
+
+	configPath = opts.ConfigPath
+	if configPath == "" {
+		configPath = GetInstallConfigPath(targetExec)
+	}
+	return targetExec, configPath, shouldCopy, nil
 }
 
 // copyFile 复制文件
@@ -127,45 +154,23 @@ func ensureConfig(configPath string) error {
 
 // Install 安装服务
 func Install(opts InstallOptions) error {
-	// 确定 bin 目录
-	binDir := opts.BinDir
-	if binDir == "" {
-		var err error
-		binDir, err = GetDefaultBinDir()
-		if err != nil {
-			return fmt.Errorf("get default bin dir: %w", err)
-		}
-	}
-
-	// 创建 bin 目录
-	if err := os.MkdirAll(binDir, 0755); err != nil {
-		return fmt.Errorf("create bin dir: %w", err)
-	}
-
 	// 获取当前可执行文件路径
 	currentExec, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("get current executable: %w", err)
 	}
 
-	// 目标可执行文件路径
-	targetExec, err := GetExecutablePath(binDir)
+	targetExec, configPath, shouldCopy, err := getInstallPaths(opts, currentExec)
 	if err != nil {
-		return fmt.Errorf("get executable path: %w", err)
+		return err
 	}
 
-	// 复制程序到 bin 目录
-	if err := copyFile(currentExec, targetExec); err != nil {
-		return fmt.Errorf("copy executable: %w", err)
-	}
-
-	// 确定配置文件路径
-	configPath := opts.ConfigPath
-	if configPath == "" {
-		var err error
-		configPath, err = GetDefaultConfigPath()
-		if err != nil {
-			return fmt.Errorf("get default config path: %w", err)
+	if shouldCopy {
+		if err := os.MkdirAll(filepath.Dir(targetExec), 0755); err != nil {
+			return fmt.Errorf("create bin dir: %w", err)
+		}
+		if err := copyFile(currentExec, targetExec); err != nil {
+			return fmt.Errorf("copy executable: %w", err)
 		}
 	}
 
@@ -256,27 +261,87 @@ func Uninstall() error {
 }
 
 // RunFunc 是服务模式运行时的回调函数
-var RunFunc func(configPath string) error
+var RunFunc func(context.Context, string) error
 
 // program 服务程序实现
 type program struct {
-	configPath string
+	configPath      string
+	ctx             context.Context
+	cancel          context.CancelFunc
+	done            chan error
+	startupComplete chan struct{}
 }
 
 func (p *program) Start(s service.Service) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	p.ctx = ctx
+	p.cancel = cancel
+	p.done = make(chan error, 1)
+	p.startupComplete = make(chan struct{})
+	defer close(p.startupComplete)
+
 	go p.run()
+	select {
+	case err := <-p.done:
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("service stopped during startup")
+	case <-time.After(1500 * time.Millisecond):
+	}
 	return nil
 }
 
 func (p *program) Stop(s service.Service) error {
+	if p.cancel != nil {
+		p.cancel()
+	}
+	if p.done != nil {
+		select {
+		case <-p.done:
+		case <-time.After(5 * time.Second):
+			return fmt.Errorf("service did not stop within 5s")
+		}
+	}
 	return nil
 }
 
 func (p *program) run() {
-	// 服务模式运行，调用主程序的运行逻辑
+	defer func() {
+		if r := recover(); r != nil {
+			err := fmt.Errorf("service panic: %v", r)
+			p.done <- err
+			p.exitAfterStartupIfUnexpected(err)
+		}
+	}()
+
 	if RunFunc != nil {
-		_ = RunFunc(p.configPath)
+		ctx := p.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		err := RunFunc(ctx, p.configPath)
+		p.done <- err
+		p.exitAfterStartupIfUnexpected(err)
+		return
 	}
+	err := fmt.Errorf("service run function is not configured")
+	p.done <- err
+	p.exitAfterStartupIfUnexpected(err)
+}
+
+func (p *program) exitAfterStartupIfUnexpected(err error) {
+	if err == nil || p.ctx == nil || p.ctx.Err() != nil {
+		return
+	}
+	if p.startupComplete != nil {
+		select {
+		case <-p.startupComplete:
+		default:
+			return
+		}
+	}
+	exitProcess(1)
 }
 
 // Run 以服务模式运行
@@ -359,9 +424,36 @@ func StartService() error {
 	if err := s.Start(); err != nil {
 		return getSystemdError("start", fmt.Errorf("start service: %w", err))
 	}
+	if err := waitForServiceRunning(s, 5*time.Second); err != nil {
+		return getSystemdError("start", err)
+	}
 
 	fmt.Printf("Service %s started successfully.\n", serviceName)
 	return nil
+}
+
+func waitForServiceRunning(s service.Service, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastStatus service.Status
+	for {
+		status, err := s.Status()
+		if err == nil {
+			lastStatus = status
+			if status == service.StatusRunning {
+				return nil
+			}
+			if status == service.StatusStopped {
+				return fmt.Errorf("start service: service stopped shortly after start")
+			}
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				return fmt.Errorf("start service: could not confirm service status: %w", err)
+			}
+			return fmt.Errorf("start service: service did not report running within %v (last status: %v)", timeout, lastStatus)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 // StopService 停止服务
